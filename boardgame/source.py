@@ -1,10 +1,11 @@
+import itertools
 from sklearn.utils import shuffle
 import wx
 import random
 
 def scale_bitmap(bitmap, width, height):
     image = bitmap.ConvertToImage()
-    image = image.Scale(width, height, wx.IMAGE_QUALITY_HIGH)
+    image = image.Scale(int(width), int(height), wx.IMAGE_QUALITY_HIGH)
     result = wx.Bitmap(image)
     return result
 #card
@@ -13,6 +14,7 @@ class card:
         self.image = scale_bitmap(bitmap,224/4,312/4)
         self.type = type
         self.value = value
+        self.enlarge = False
     
     def get_type(self):
         return self.type
@@ -26,7 +28,6 @@ class card:
 
     def get_card_bitmap(self):
         return self.image
-
 #deck
 class deck:
     def __init__(self):
@@ -129,52 +130,57 @@ class BetArea(wx.Panel):
     h = 100
     def __init__(self, parent, position, player_area, timer):
         wx.Panel.__init__ ( self, parent, id = wx.ID_ANY, size = wx.Size( self.w, self.h ), style = wx.TAB_TRAVERSAL )
-        self.SetBackgroundColour( wx.Colour( 0, 255, 255 ) )  
+        self.SetBackgroundColour( wx.Colour( 255, 255, 255 ) )  
         self.Centre() 
         self.SetPosition(position)
         self.active_player_area = player_area#widget that show player's details
         self.active_player = player_area.get_player()#player
         self.timer = timer
-        action = "smallbind"
         
-        self.sc_money = wx.SpinCtrl(self, pos=(0,0),
-              size=(300,50), style=wx.SP_ARROW_KEYS, min=0, max=1500, initial=0)
+        self.sc_money = wx.SpinCtrl(self, pos=(10,10),
+              size=(250,50), style=wx.SP_ARROW_KEYS, min=self.Parent.minbet, max=150, initial=0)
         self.button = wx.Button(self, label = "confirm", pos = (20,70))
         self.button.Bind(wx.EVT_BUTTON, self.confirm)
         self.Show(False)
-    
-    def set_action(self,action):
-        self.action = action
 
     def confirm(self,event):
         self.Show(False)
-        if self.action == "call":
-            self.active_player.call(self.sc_money.GetValue())
-            print("call")
-        if self.action == "raise":
-            self.active_player.moneyraise(self.sc_money.GetValue())
-            print("raise")
-        if self.action == "fold":
-            self.active_player.fold()
-            print("fold")
-
+        self.active_player.moneyraise(self.sc_money.GetValue())
+        self.Parent.poolArea.addToPool(self.sc_money.GetValue())
+        self.Parent.minbet = self.sc_money.GetValue()
         self.active_player_area.Refresh()
         self.timer.Start(1000)
+        self.Parent.fold_button.Show(False)
+        self.Parent.raise_button.Show(False)
+        self.Parent.call_button.Show(False)
 
 
 class cardShownArea(wx.Panel):
     w = 300
     h = 100
-    def __init__(self, parent, position, deck, turn):
+    def __init__(self, parent, position, deck):
         wx.Panel.__init__ ( self, parent, id = wx.ID_ANY, size = wx.Size( self.w, self.h ), style = wx.TAB_TRAVERSAL )
         self.deck = deck
-        self.shown_deck = []
-        self.turn = turn
         
+        self.shown_deck = []
+        self.highlight = False
         self.Bind(wx.EVT_PAINT, self.OnPaint) 
         self.Centre() 
         self.SetPosition(position)
-        self.Show(True)
+        self.Show(False)
+
+    def drawFirstThree(self):
+        for i in range(3):
+            card_indx = random.randint(0, len(self.deck)-1)
+            self.shown_deck.append(self.deck[card_indx])
+            self.deck.remove(self.deck[card_indx])
+
+    def drawCard(self):
+        card_indx = random.randint(0, len(self.deck)-1)
+        self.shown_deck.append(self.deck[card_indx])
+        self.deck.remove(self.deck[card_indx])
+        self.Refresh()
+
 
     def OnPaint(self, e): 
         dc = wx.PaintDC(self) 
@@ -182,13 +188,16 @@ class cardShownArea(wx.Panel):
         dc.SetPen(pen) 
         
         #draw card owned to screen
-        if self.turn == 0:
-            return
         for i in range(len(self.shown_deck)):
-            card_indx = random.randint(0, len(self.deck)-1)
-            self.shown_deck.append(self.deck[card_indx])
-            dc.DrawBitmap(self.deck[card_indx].get_card_bitmap(),i*50,0)
-            self.deck.remove(self.deck[card_indx])
+            if not self.shown_deck[i].enlarge:
+                dc.DrawBitmap(self.shown_deck[i].get_card_bitmap(),i*50,0)
+            else:
+                enl= scale_bitmap(self.shown_deck[i].get_card_bitmap(),224/2,312/2)
+                dc.DrawBitmap(enl,i*50,0)
+
+
+    def getCards(self):
+        return self.shown_deck
             
         
     
@@ -204,6 +213,8 @@ class player:
 
         
         self.player_hand = []
+        self.folded = False
+        self.action = ""
        
     
     def chip_update(self):
@@ -238,20 +249,22 @@ class player:
     def money(self):
         return self.money
 
-    def call(self, money):
+    def call(self,money):
         self.money = self.money - money
         self.chip_update()
-        return 
+        self.action = "call"
 
     def moneyraise(self,money):
         self.money = self.money - money
         self.chip_update()
+        self.action = "raise"
      
-    def small_bind(self,money):
-        self.money = self.money - 1
+    def small_bind(self):
+        self.money = self.money - self.min_bet
     
     def fold(self):
-        pass
+        self.folded = True
+        self.action = "fold"
         
 
     def cur_hand(self):
@@ -281,22 +294,50 @@ class player:
         deck.remove(deck[card_indx])
 
 class MoneyPoolArea(wx.Panel):
-    def __init__(self, parent, player_,position,deck):
-        return
+    w = 100
+    h = 100
+    def __init__(self, parent,position,money):
+        wx.Panel.__init__ ( self, parent, id = wx.ID_ANY, size = wx.Size( int(self.w), int(self.h) ), style = wx.TAB_TRAVERSAL )
+        self.money = money
+        self.SetBackgroundColour( wx.Colour( 0, 255, 255 ) )  
+        self.Bind(wx.EVT_PAINT, self.OnPaint) 
+        self.Centre() 
+        self.SetPosition(position)
+        self.Show(True)
+    def OnPaint(self, e): 
+        dc = wx.PaintDC(self) 
+        pen = wx.Pen(wx.Colour(0,0,0)) 
+        dc.SetPen(pen) 
+        dc.DrawText(str(self.money)+"$$",40,40)
+    def addToPool(self,money):
+        self.money+= money
+        self.Refresh()
+
 
 class PlayerArea(wx.Panel):
     w = 210
     h = 160
     def __init__(self, parent, player_,position,deck):
         wx.Panel.__init__ ( self, parent, id = wx.ID_ANY, size = wx.Size( self.w, self.h ), style = wx.TAB_TRAVERSAL )
+        #get the deck that is in use from main
         self.deck = deck
+        # add two cards into player's hand
         player_.add_card_from(self.deck)
         player_.add_card_from(self.deck)
         self.p1 = player_
+        self.action = ""
+        self.final_hand = ""
+        if player_.name == "You":
+            self.is_you = True
+        else:
+            self.is_you = False
+
         self.name_label = scale_bitmap(wx.Bitmap("ui\\name_label.png"),100,30)#name
         self.money_label = scale_bitmap(wx.Bitmap("ui\\money_label.png"),80,40)#money
+        self.chat_label = scale_bitmap(wx.Bitmap("ui\\chat_label.png"),80,40)#chat
+        self.back_card = scale_bitmap(wx.Bitmap("ui\\back_card.jpg"),224/4,312/4)#back
 
-
+        self.SetBackgroundColour( wx.Colour( 0, 255, 255 ) )  
         self.Bind(wx.EVT_PAINT, self.OnPaint) 
         self.Centre() 
         self.SetPosition(position)
@@ -305,6 +346,13 @@ class PlayerArea(wx.Panel):
    
     def get_player(self):
         return self.p1  
+
+    def center(self,size,x_cor,y_cor):
+        return( [x_cor+size.x/2,y_cor+size.y/2] )
+
+    
+
+    
        
 
     def OnPaint(self, e): 
@@ -313,8 +361,22 @@ class PlayerArea(wx.Panel):
         dc.SetPen(pen) 
         
         #draw card owned to screen
-        for i in range(len(self.p1.cur_hand())):
-            dc.DrawBitmap(self.p1.cur_hand()[i].get_card_bitmap(),i*50,0)
+        if self.is_you:
+            for i in range(len(self.p1.cur_hand())):
+                dc.DrawBitmap(self.p1.cur_hand()[i].get_card_bitmap(),i*50,0)
+            dc.DrawBitmap(self.name_label,self.w-self.name_label.GetSize().x,0)
+            dc.DrawBitmap(self.money_label,self.w-self.name_label.GetSize().x+10,self.name_label.GetSize().y)
+           
+            dc.DrawText(self.p1.name,150,6)
+            dc.DrawText(str(self.p1.money)+"$",146,41)
+    
+        else:
+            for i in range(len(self.p1.cur_hand())):
+                dc.DrawBitmap(self.back_card,int(self.w-224/4-i*50),0)
+            dc.DrawBitmap(self.name_label,0,0)
+            dc.DrawBitmap(self.money_label,10,self.name_label.GetSize().y)
+            dc.DrawText(self.p1.name,43-len(self.p1.name),6)
+            dc.DrawText(str(self.p1.money)+"$",38,41)
         
         #draw chip to screen
         for i in range(len(self.p1.chiplist)):
@@ -352,84 +414,22 @@ class PlayerArea(wx.Panel):
             if i == 7:
                 for j in range(len(self.p1.chiplist[i])):
                     dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),j+150,int(self.h/2)+5)
-            
-            dc.DrawBitmap(self.name_label,0,int(self.h/2)+30)
-            dc.DrawBitmap(self.money_label,11,int(self.h/2)+45)
-         
-            dc.DrawText(self.p1.name,40,70)
-            
-            dc.DrawText(str(self.p1.money),40,100)
-
-    
-    
         
+        if self.p1.action != "":
+            dc.DrawBitmap(self.chat_label,12,int(self.h/2)+10)
+            dc.DrawText(self.p1.action,40,int(self.h/2)+13)
+            dc.DrawText(self.final_hand,40,int(self.h/2)+50)
 
-
-    
-    
-class player_area_style_2(PlayerArea):
-    def __init__(self, parent, player_,position,deck):
-        super().__init__(parent, player_,position,deck)
-        self.back_card = scale_bitmap(wx.Bitmap("ui\\back_card.jpg"),224/4,312/4)#name
-        
-
-    def OnPaint(self, e): 
-        dc = wx.PaintDC(self) 
-        pen = wx.Pen(wx.Colour(0,0,0)) 
-        dc.SetPen(pen) 
-        
-        #draw card owned to screen
-        for i in range(len(self.p1.cur_hand())):
-            dc.DrawBitmap(self.back_card,int(self.w-224/4-i*50),0)
-        
-        #draw chip to screen
-        for i in range(len(self.p1.chiplist)):
-            if not len(self.p1.chiplist[i]):
-                pass
-            if i == 0:
-               
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),0+j,int(self.h/2)+30)
-
-            if i == 1:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),30+j,int(self.h/2)+30)
-
-            if i == 2:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),60+j,int(self.h/2)+30)
             
-            if i == 3:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),0+j,int(self.h/2)+55)
             
-            if i == 4:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),30+j,int(self.h/2)+55)
-
-            if i == 5:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),60+j,int(self.h/2)+55)
-
-            if i == 6:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),0+j,int(self.h/2)+5)
-
-            if i == 7:
-                for j in range(len(self.p1.chiplist[i])):
-                    dc.DrawBitmap(self.p1.chiplist[i][0].chip_image(),30+j,int(self.h/2)+5)
-            
-            dc.DrawBitmap(self.name_label,100,int(self.h/2)+30)
-            dc.DrawBitmap(self.money_label,89,int(self.h/2)+45)
-         
-            dc.DrawText(self.p1.name,40,70)
-            dc.DrawText(str(self.p1.money),40,100)
 
 
 def hand_check(hand):
     handVal = []#list of card value in player hadn
     cardFre = []#frequency of a card in the hand calculate using count()
     same_type = True
+    result = ""
+    result_hand = []
 
     for i in range (5):
         handVal.append(hand[i].get_value())
@@ -441,38 +441,35 @@ def hand_check(hand):
 
 
     if (sorted(handVal) == list(range(min(handVal), max(handVal)+1))) and same_type and handVal[0] == 10 :
-        print("Royal flush")
+        result = 10 #("Royal flush")
     elif (sorted(handVal) == list(range(min(handVal), max(handVal)+1))) and same_type :
-        print("Straight flush")
+        result = 9 #("Straight flush")
 
-    if (sorted(handVal) == list(range(min(handVal), max(handVal)+1))) and not same_type :
-        print("Straight")
+    elif (sorted(handVal) == list(range(min(handVal), max(handVal)+1))) and not same_type :
+        result = 5 #("Straight")
 
-    if (sorted(handVal) != list(range(min(handVal), max(handVal)+1))) and same_type :
-        print("Flush")
+    elif (sorted(handVal) != list(range(min(handVal), max(handVal)+1))) and same_type :
+        result = 6 #("Flush")
     
-    if max(cardFre) == 4:
-        print("Four of a kind")
+    elif max(cardFre) == 4:
+        result = 8 #("Four of a kind")
 
-    if max(cardFre) == 3 and sorted(set(cardFre))[-2] == 2:
-        print("Full house")
+    elif max(cardFre) == 3 and sorted(set(cardFre))[-2] == 2:
+        result = 7 #("Full house")
 
-    if max(cardFre) == 3 and sorted(set(cardFre))[-2] == 1:
-        print("Three of a kind")
+    elif max(cardFre) == 3 and sorted(set(cardFre))[-2] == 1:
+        result = 4 #("Three of a kind")
 
-    if max(cardFre) == 2 and cardFre.count(2) == 4:
-          print("Two pair")
+    elif max(cardFre) == 2 and cardFre.count(2) == 4:
+        result = 3 #("Two pair")
     
-    if max(cardFre) == 2 and cardFre.count(2) == 2:
-          print("Pair")
+    elif max(cardFre) == 2 and cardFre.count(2) == 2:
+        result = 2 #("Pair")
 
-    if max(cardFre) == 1:
-        print("High Card")
+    elif max(cardFre) == 1:
+        result = 1 #"High Card")
 
-    print(handVal)
-    print(cardFre)
-
-    
+    return result
      
 
 
@@ -486,28 +483,43 @@ class Mywin(wx.Frame):
         self.InitUI() 
          
     def InitUI(self): 
+        self.turn = 0
+        self.count = 0
+        self.minbet = 2
         self.SetBackgroundColour( wx.Colour( 255, 255, 255 ) )        
         self.Bind(wx.EVT_PAINT, self.OnPaint) 
         self.Centre() 
-        self.Bind(wx.EVT_LEFT_UP, self.onClick)
+        
         self.init_player_and_deck()
 
         
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.player_update, self.timer)
         self.timer.Start(1000)
-
-
-        fold_button = wx.Button(self, label = "fold", pos = (20,70))
-        fold_button.Bind(wx.EVT_BUTTON, self.onFoldButton)
-        bet_button = wx.Button(self, label = "call", pos = (20,100))
-        bet_button.Bind(wx.EVT_BUTTON, self.onCallButton)
-        raise_button = wx.Button(self, label = "raise", pos = (20,130))
-        raise_button.Bind(wx.EVT_BUTTON, self.onRaiseButton)
-
-        self.bet_area = BetArea(self, (self.Size.x*1/3,self.Size.y*1/3), self.panel[3], self.timer)
-        self.cardShownPanel = cardShownArea(self,(self.Size.x*1/3,self.Size.y*1/3) , self.new_deck.deck_of_card,self.cur_player_num)
+       
         
+
+
+        self.fold_button = wx.Button(self, label = "fold", pos = (280,500))
+        self.fold_button.Bind(wx.EVT_BUTTON, self.onFoldButton)
+        
+
+        self.call_button = wx.Button(self, label = "call", pos = (360,500))
+        self.call_button.Bind(wx.EVT_BUTTON, self.onCallButton)
+       
+
+        self.raise_button = wx.Button(self, label = "raise", pos = (440,500))
+        self.raise_button.Bind(wx.EVT_BUTTON, self.onRaiseButton)
+        
+        self.continue_btt = wx.Button(self, label = "Continue ?", pos = (360,400))
+        self.continue_btt.Bind(wx.EVT_BUTTON, self.onContinueButton)
+        self.continue_btt.Show(False)
+        
+        self.hide_button()
+        
+        self.bet_area = BetArea(self, (int(self.Size.x/2-150),int(self.Size.y/2+100)), self.panel[2], self.timer) #150 is half width size of betArea
+        self.cardShownPanel = cardShownArea(self,(int(self.Size.x*1/3),int(self.Size.y*1/3)) , self.new_deck.deck_of_card)
+      
        
 
 
@@ -519,93 +531,224 @@ class Mywin(wx.Frame):
         self.new_deck = deck()#create new deck
         random.shuffle(self.new_deck.deck_of_card)
 
-        p1_panel = PlayerArea(self,player("Bob"), (200,0), self.new_deck.deck_of_card)
-        p2_panel = player_area_style_2(self,player("Alice"),(0,300),self.new_deck.deck_of_card)
-        p3_panel = player_area_style_2(self,player("You"),(600,300),self.new_deck.deck_of_card)
-        p4_panel = player_area_style_2(self,player("Your mom"),(600,0), self.new_deck.deck_of_card)
+        self.p1_panel = PlayerArea(self,player("Bob"), (200,0), self.new_deck.deck_of_card)
+        self.p2_panel = PlayerArea(self,player("Alice"),(0,300),self.new_deck.deck_of_card)
+        self.p3_panel = PlayerArea(self,player("You"),(600,300),self.new_deck.deck_of_card)
+        self.p4_panel = PlayerArea(self,player("Your mom"),(600,0), self.new_deck.deck_of_card)
 
-        self.panel = [p1_panel,p2_panel,p3_panel,p4_panel]
-        self.cur_player_num = 3
+        self.panel = [self.p1_panel,self.p2_panel,self.p3_panel,self.p4_panel]
+        self.initial_plr = random.randint(0,3)
+        self.cur_player_num = self.initial_plr
         self.active_panel = self.panel[self.cur_player_num]
+        self.active_panel.get_player().call(self.minbet)  
+
+        self.poolArea = MoneyPoolArea(self, (int(self.Size.x/2+50),int(self.Size.y/2-300)),0)
+        self.poolArea.addToPool(self.minbet)
+        self.next()
+
         
-        self.action =""
         
+    def hide_button(self):
+        self.fold_button.Show(False)
+        self.call_button.Show(False)
+        self.raise_button.Show(False)
+
        
        
-    def next(self):
+    def next(self): 
         self.cur_player_num = self.cur_player_num + 1
         if self.cur_player_num>3:
             self.cur_player_num = 0
+        
+
+
+        if (self.count == 4):
+            self.turn = self.turn+1
+            self.count = 0
+            if self.turn == 1:
+                self.cardShownPanel.Show(True)
+                self.cardShownPanel.drawFirstThree()
+            if self.turn >1:
+                self.cardShownPanel.drawCard()
+            if self.turn == 3:
+                self.hand_check()
+                self.timer.Stop()
+                self.hide_button()
+
+
+        self.count+=1
+       
+        
+    def all_fold(self):
+        count = 0
+    
+        for i in self.panel:
+            if i.get_player().folded:
+                count +=1
+        if count == 3:
+            for i in self.panel:
+                if not i.get_player().folded:
+                    self.timer.Stop()
+                    i.SetBackgroundColour( wx.Colour( 0, 128, 255 ) )  
+                    i.Refresh()
+                    i.get_player().money+=self.poolArea.money
+                    self.poolArea.money = 0
+                    self.continue_btt.Show(True)
+                    
+        
+            
 
         
 
     def player_update(self,event):
-        print(self.cur_player_num)
+       
         self.active_panel = self.panel[self.cur_player_num]
+        if (self.active_panel.get_player().folded):
+            self.next()
+            return
         if self.active_panel.get_player().name == "You":
+            
+            self.fold_button.Show(True)
+            self.call_button.Show(True)
+            self.raise_button.Show(True)
             print("your turn")
+            self.bet_area.sc_money.SetMin(self.minbet)
             self.next()
             self.timer.Stop()  
+            self.Refresh()
             return
         
        
         rand = random.randint(0, 2)
-        money = random.randint(0, 1500)
+        money = random.randint(self.minbet, 150)
         print(self.active_panel.get_player().name)
         if rand == 0:
-            self.active_panel.get_player().call(money)
+            self.active_panel.get_player().call(self.minbet)
+           
             print("call")
         
         if rand == 1:
             self.active_panel.get_player().moneyraise(money)
+            self.minbet = money
+      
             print("raise")
 
         if rand == 2:
             self.active_panel.get_player().fold()
+            self.all_fold()
             print("fold")
 
         
-       
+        if rand!= 2:
+            self.poolArea.addToPool(self.minbet)
+
         self.active_panel.Refresh()
         self.next()
 
         
+        
+    def reset(self): 
+        for i in self.panel:
+            i.get_player().folded = False
+            i.final_hand = ""
+            i.get_player().action = ""
+            if i.get_player().name == "You" :
+                i.is_you = True
+            else:
+                i.is_you = False
+            i.SetBackgroundColour(wx.Colour( 0, 255, 255 ))
+            i.Refresh()
+        self.timer.Start(1000) 
+        self.minbet = 2
+        self.turn = 0 
+        self.count = 0
+        self.initial_plr = random.randint(0,3)
+        self.cur_player_num = self.initial_plr
+        self.panel[self.cur_player_num].get_player().call(self.minbet)
+        self.next()
+        self.panel[self.cur_player_num].Refresh()
 
+        self.continue_btt.Show(False)
+        self.cardShownPanel.shown_deck = []
+        self.cardShownPanel.Refresh()
+        self.new_deck = deck()#create new deck
+        random.shuffle(self.new_deck.deck_of_card)
+
+      
+       
+        
+
+        
+    def onContinueButton(self, event):
+        self.reset()
        
     def onCallButton(self, event):
-        self.bet_area.Show()
-        self.bet_area.set_action("call")
+        self.active_panel.get_player().call(self.minbet)
+        self.active_panel.Refresh()
+        print("call")
+        self.poolArea.addToPool(self.minbet)
+        self.timer.Start(1000)
+        self.hide_button()
+
 
     def onFoldButton(self, event):
-        self.bet_area.Show()
-        self.bet_area.set_action("fold")
+        self.panel[2].get_player().fold()
+        self.hide_button()
+        self.all_fold()
+        self.active_panel.Refresh()
+        self.timer.Start(1000)
+        self.hide_button()
 
     def onRaiseButton(self, event):
         self.bet_area.Show()
-        self.bet_area.set_action("raise")
-
-
-    def onClick(self, event):
-        hand=[]
-        for i in range(5):
-            link = "card\\" + str(i+8)+"hearts.png"
-            image = wx.Bitmap(link)
-            hand.append (card(image,"hearts",i+8))
+        self.poolArea.addToPool(self.minbet)
+    
+    def hand_check(self):
+        result = -1
+        winner_score = -1
         
-        hand[0].set_value(3)
-        hand[0].set_type("dia")
-        hand[1].set_value(11)
-        hand[1].set_type("clubs")
-        hand[2].set_value(8)
-        hand[2].set_type("spades")
-        hand[3].set_value(4)
-        hand[3].set_type("hearts")
-        hand[4].set_value(2)
-        hand[4].set_type("spades")
+        for i in self.panel:
+            i.is_you = True
+            
+            for subset in itertools.combinations(self.cardShownPanel.getCards()+i.get_player().player_hand, 5):
+                hand_value = hand_check(subset)
+                if result < hand_value :
+                    result = hand_value
+
+            if result == 10:
+                i.final_hand = ("Royal flush")
+            elif result == 9:
+                i.final_hand = (" Straight flush")
+            elif result == 8:
+                i.final_hand = ("Four of a kind")
+            elif result == 7:
+                i.final_hand = ("Full house")
+            elif result == 6:
+                i.final_hand = ("Flush")
+            elif result == 5:
+                i.final_hand = (" Straight")
+            elif result == 4:
+                i.final_hand = ("Three of a kind")
+            elif result == 3:
+                i.final_hand = ("Two pair")
+            elif result == 2:
+                i.final_hand = (" Pair")
+            elif result == 1:
+                i.final_hand = ("High Card")
+            if winner_score < result and not i.get_player().folded :
+                winner_score = result
+                winner = i
+                
+            
+            i.Refresh() 
+            result = -1 
+           
+        winner.SetBackgroundColour( wx.Colour( 0, 128, 255 ) )  
+        winner.Refresh()
+        winner.get_player().money+=self.poolArea.money
+        self.poolArea.money = 0
+        self.continue_btt.Show(True)
         
-      
-        hand_check(hand)
-        return
                 
 
     # Paint to adjust position of what is printed to the screen    
@@ -613,6 +756,7 @@ class Mywin(wx.Frame):
         dc = wx.PaintDC(self) 
         pen = wx.Pen(wx.Colour(0,0,0)) 
         dc.SetPen(pen) 
+        
         
          
             
